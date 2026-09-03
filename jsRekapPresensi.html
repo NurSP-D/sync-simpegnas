@@ -1,0 +1,583 @@
+<script>
+  /**
+   * ==========================================
+   * MANAJEMEN STATE & VARIABEL GLOBAL
+   * ==========================================
+   */
+  let syncTimeout = null;   // Timeout ID agar polling tidak tumpang tindih
+  let isSyncActive = false; // Flag status polling
+
+  /**
+   * ==========================================
+   * INISIALISASI HALAMAN (EVENT LISTENERS)
+   * ==========================================
+   */
+  function initRekapPresensiForm() {
+    // -------------------------------------------------------------
+    // LANGKAH 1: Ambil Token Tersimpan dari LocalStorage (DIDAHULUKAN)
+    // -------------------------------------------------------------
+    const savedToken = localStorage.getItem('saved_api_token');
+    const tokenInput = document.getElementById('tokenInput');
+    
+    if (tokenInput) {
+      if (savedToken) {
+        tokenInput.value = savedToken;
+      }
+
+      // Event listener untuk menyimpan setiap perubahan token
+      tokenInput.addEventListener('input', function() {
+        localStorage.setItem('saved_api_token', this.value.trim());
+      });
+    }
+
+    // -------------------------------------------------------------
+    // LANGKAH 2: Set Default Dropdown Bulan
+    // -------------------------------------------------------------
+    const selectBulan = document.getElementById('selectBulan');
+    if (selectBulan) {
+      selectBulan.value = new Date().getMonth() + 1;
+    }
+
+    // -------------------------------------------------------------
+    // LANGKAH 3: Populate Dropdown Tahun (Dengan Fallback Tahun Lokal)
+    // -------------------------------------------------------------
+    const selectTahun = document.getElementById('selectTahun');
+    
+    function populateYearDropdown(currentYear) {
+      if (!selectTahun) return;
+      selectTahun.innerHTML = ''; // Bersihkan opsi lama
+      
+      const startYear = 2026;
+      const targetYear = Math.max(startYear, currentYear);
+
+      for (let y = startYear; y <= targetYear; y++) {
+        const opt = document.createElement('option');
+        opt.value = y;
+        opt.textContent = y;
+        if (y === targetYear) opt.selected = true;
+        selectTahun.appendChild(opt);
+      }
+    }
+
+    // Panggil server untuk mendapatkan tahun server, gunakan tahun lokal jika gagal
+    if (typeof google !== 'undefined' && google.script && google.script.run) {
+      google.script.run
+        .withSuccessHandler(function(serverYear) {
+          populateYearDropdown(serverYear || new Date().getFullYear());
+        })
+        .withFailureHandler(function() {
+          populateYearDropdown(new Date().getFullYear());
+        })
+        .getCurrentServerYear();
+    } else {
+      populateYearDropdown(new Date().getFullYear());
+    }
+
+    // -------------------------------------------------------------
+    // LANGKAH 4: Cek Status Sinkronisasi Server
+    // -------------------------------------------------------------
+    checkSyncStatus();
+  }
+
+  document.addEventListener('DOMContentLoaded', initRekapPresensiForm);
+
+
+  /**
+   * ==========================================
+   * HANDLER FUNGSI UTAMA (EVENT HANDLERS)
+   * ==========================================
+   */
+
+  function handleRekapKantor() {
+    const tokenInput = document.getElementById('tokenInput');
+    if (!tokenInput) return;
+    
+    const token = tokenInput.value.trim();
+    if (!validateToken(token)) return;
+
+    const btn = document.getElementById('btnRekapKantor');
+    const spinner = document.getElementById('btnKantorSpinner');
+    const icon = document.getElementById('btnKantorIcon');
+    const btnText = document.getElementById('btnKantorText');
+
+    setButtonLoadingState(btn, true, () => {
+      if (spinner) spinner.style.display = 'inline-block';
+      if (icon) icon.style.display = 'none';
+      if (btnText) btnText.innerText = 'Memproses Data Kantor...';
+    });
+
+    google.script.run
+      .withSuccessHandler(function(response) {
+        resetKantorButtonUI(btn, spinner, icon, btnText);
+
+        if (response && response.success) {
+          showAlert('success', `<i class="bi bi-check-circle-fill me-2"></i>${response.message}`);
+        } else {
+          const msg = response ? response.message : 'Gagal memproses data kantor.';
+          showAlert('danger', `<i class="bi bi-exclamation-triangle-fill me-2"></i>${msg}`);
+        }
+      })
+      .withFailureHandler(function(err) {
+        resetKantorButtonUI(btn, spinner, icon, btnText);
+        showAlert('danger', `<i class="bi bi-exclamation-octagon-fill me-2"></i>Sistem Error: ${err.message}`);
+      })
+      .processKantorFromUI(token);
+  }
+
+  /**
+   * Menjalankan / Melanjutkan Sinkronisasi Rekap Presensi
+   * @param {boolean} isResume - true jika menekan tombol "Lanjutkan Sync"
+   */
+  function handleJalankanRekap(isResume = false) {
+    const tokenInput = document.getElementById('tokenInput');
+    const selectBulan = document.getElementById('selectBulan');
+    const selectTahun = document.getElementById('selectTahun');
+    const btnStart = document.getElementById('btnJalankanRekap');
+    const btnResume = document.getElementById('btnResumeSync');
+
+    if (!tokenInput || !selectBulan || !selectTahun || !btnStart) return;
+
+    const token = tokenInput.value.trim();
+    const bulan = selectBulan.value;
+    const tahun = selectTahun.value;
+
+    if (!validateToken(token)) return;
+
+    // 1. KUNCI UI SECARA PASTI
+    btnStart.disabled = true;
+    selectBulan.disabled = true;
+    selectTahun.disabled = true;
+    if (btnResume) btnResume.disabled = true;
+
+    if (isResume) {
+      if (btnResume) {
+        btnResume.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>Melanjutkan...`;
+      }
+    } else {
+      btnStart.innerHTML = `<span class="spinner-border spinner-border-sm me-2"></span>Memulai Sync...`;
+    }
+
+    localStorage.setItem('pending_sync_notify', 'true');
+    const forceReset = !isResume;
+
+    // 2. TAMPILKAN CONTAINER PROGRESS BAR DALAM STATE LOADING / RESET ULANG UI
+    const container = document.getElementById('syncProgressContainer');
+    const statusText = document.getElementById('syncStatusText');
+    const bar = document.getElementById('syncProgressBar');
+    const percentText = document.getElementById('syncPercentText');
+    const detailText = document.getElementById('syncDetailText');
+    const pegawaiText = document.getElementById('syncPegawaiText');
+    
+    if (container) container.style.display = 'block';
+    if (statusText) statusText.innerHTML = `<span class="text-primary"><i class="bi bi-arrow-repeat spin me-1"></i>Menghubungkan ke server...</span>`;
+    if (bar) {
+      bar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-primary';
+      bar.style.width = '0%';
+      bar.innerText = '0%';
+    }
+    if (percentText) percentText.innerText = '0%';
+    if (detailText) detailText.innerText = 'Menyiapkan data kantor...';
+    if (pegawaiText) pegawaiText.innerText = '0 pegawai direkap';
+
+    // 3. JALANKAN POLLING & SET FLAG AKTIF
+    stopPolling();
+    isSyncActive = true;
+    
+    // Panggil pengecekan status pertama setelah delay singkat
+    syncTimeout = setTimeout(checkSyncStatus, 1500);
+
+    // 4. MEMANGGIL BACKEND
+    google.script.run
+      .withSuccessHandler(function(response) {
+        if (response && response.success) {
+          showAlert('info', `<i class="bi bi-info-circle-fill me-2"></i>${response.message}`);
+        } else {
+          localStorage.removeItem('pending_sync_notify');
+          stopPolling();
+          resetSyncButtonUI();
+          const msg = response ? response.message : 'Gagal memproses permintaan.';
+          showAlert('danger', `<i class="bi bi-exclamation-triangle-fill me-2"></i>${msg}`);
+        }
+      })
+      .withFailureHandler(function(err) {
+        localStorage.removeItem('pending_sync_notify');
+        stopPolling();
+        resetSyncButtonUI();
+        showAlert('danger', `<i class="bi bi-exclamation-octagon-fill me-2"></i>Sistem Error: ${err.message}`);
+      })
+      .startSyncPresensi(token, bulan, tahun, forceReset); 
+  }
+
+
+  /**
+   * ==========================================
+   * FUNGSI MONITORING & POLLING (PROGRESS BAR)
+   * ==========================================
+   */
+
+  function startPollingProgress() {
+    stopPolling();
+    isSyncActive = true;
+    
+    const container = document.getElementById('syncProgressContainer');
+    if (container) container.style.display = 'block';
+    
+    checkSyncStatus();
+  }
+
+  function stopPolling() {
+    isSyncActive = false;
+    if (syncTimeout) {
+      clearTimeout(syncTimeout);
+      syncTimeout = null;
+    }
+  }
+
+  function checkSyncStatus() {
+    google.script.run
+      .withSuccessHandler(function(progress) {
+        // Jika tidak ada data dan polling tidak sedang dipaksa aktif, hentikan
+        if (!progress) {
+          if (!isSyncActive) {
+            stopPolling();
+            resetSyncButtonUI();
+            const container = document.getElementById('syncProgressContainer');
+            if (container) container.style.display = 'none';
+          } else {
+            // Jika sync sedang aktif tetapi backend belum siap, ulangi polling
+            syncTimeout = setTimeout(checkSyncStatus, 2000);
+          }
+          return;
+        }
+
+        const btnStart = document.getElementById('btnJalankanRekap');
+        const btnResume = document.getElementById('btnResumeSync');
+        const selectBulan = document.getElementById('selectBulan');
+        const selectTahun = document.getElementById('selectTahun');
+        const container = document.getElementById('syncProgressContainer');
+        const bar = document.getElementById('syncProgressBar');
+        const percentText = document.getElementById('syncPercentText');
+        const txtResumePercent = document.getElementById('txtResumePercent');
+        const detailText = document.getElementById('syncDetailText');
+        const pegawaiText = document.getElementById('syncPegawaiText');
+        const statusText = document.getElementById('syncStatusText');
+
+        const processedK = progress.processedKantor || 0;
+        const totalK = progress.totalKantor || 0;
+        const totalP = progress.totalPegawai || 0;
+        const percent = progress.percent || 0;
+
+        const processedKFormatted = processedK.toLocaleString('id-ID');
+        const totalKFormatted = totalK.toLocaleString('id-ID');
+        const totalPFormatted = totalP.toLocaleString('id-ID');
+
+        // Atur nilai dropdown jika server memberikan info bulan/tahun
+        if (progress.bulan && selectBulan) selectBulan.value = progress.bulan;
+        if (progress.tahun && selectTahun) selectTahun.value = progress.tahun;
+
+        // Tampilkan container progress bar jika status bukan IDLE atau sedang dalam proses sync baru
+        if (container && (progress.status !== 'IDLE' || isSyncActive)) {
+          container.style.display = 'block';
+        }
+
+        // Render teks persentase & jumlah pegawai
+        if (percentText) percentText.innerText = percent + '%';
+        if (txtResumePercent) txtResumePercent.innerText = percent + '%';
+        if (detailText) {
+          detailText.innerText = `${processedKFormatted} dari ${totalKFormatted} kantor diproses`;
+        }
+        if (pegawaiText) {
+          pegawaiText.innerText = `${totalPFormatted} pegawai direkap`;
+        }
+
+        // -------------------------------------------------------------
+        // CASE 1: PROSES SEDANG BERJALAN (PROCESSING)
+        // -------------------------------------------------------------
+        if (progress.status === 'PROCESSING') {
+          if (btnStart) {
+            btnStart.disabled = true;
+            btnStart.innerHTML = `<span class="spinner-border spinner-border-sm me-2"></span>Sedang Menyinkronkan...`;
+          }
+          if (selectBulan) selectBulan.disabled = true;
+          if (selectTahun) selectTahun.disabled = true;
+          if (btnResume) btnResume.style.display = 'none';
+          
+          if (bar) {
+            bar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-primary';
+            bar.style.width = percent + '%';
+            bar.setAttribute('aria-valuenow', percent);
+            bar.innerText = percent + '%';
+          }
+          
+          if (statusText) {
+            statusText.innerHTML = `<span class="text-primary"><i class="bi bi-arrow-repeat spin me-1"></i>${progress.message || 'Proses sinkronisasi latar belakang berjalan...'}</span>`;
+          }
+
+          // Lanjutkan Polling setiap 2.5 detik
+          syncTimeout = setTimeout(checkSyncStatus, 2500);
+
+        // -------------------------------------------------------------
+        // CASE 2: TERHENTI KARENA TOKEN EXPIRED / PAUSED
+        // -------------------------------------------------------------
+        } else if (progress.status === 'PAUSED_TOKEN_EXPIRED' || progress.status === 'ERROR_TOKEN' || progress.status === 'PAUSED_MANUAL') {
+          stopPolling();
+
+          if (bar) {
+            bar.className = 'progress-bar bg-warning text-dark';
+            bar.style.width = percent + '%';
+            bar.innerText = percent + '%';
+          }
+
+          if (statusText) {
+            statusText.innerHTML = `<span class="text-warning fw-bold"><i class="bi bi-exclamation-triangle-fill me-1"></i>Terhenti di ${percent}% (Token Expired/Diberhentikan)</span>`;
+          }
+
+          resetSyncButtonUI();
+          if (btnResume) {
+            btnResume.style.display = 'inline-block';
+            btnResume.disabled = false;
+          }
+          
+          if (localStorage.getItem('pending_sync_notify') === 'true') {
+            showAlert('warning', `
+              <div class="d-flex align-items-center justify-content-between">
+                <div>
+                  <i class="bi bi-exclamation-circle-fill me-2"></i>
+                  <strong>Token Expired / Terhenti!</strong> Proses terhenti pada kantor ke-${processedKFormatted} (${percent}%). Silakan masukkan Token baru lalu klik <strong>'Lanjutkan Sync'</strong>.
+                </div>
+              </div>
+            `);
+          }
+
+        // -------------------------------------------------------------
+        // CASE 3: TERHENTI KARENA ERROR SISTEM (ERROR_SYSTEM)
+        // -------------------------------------------------------------
+        } else if (progress.status === 'ERROR_SYSTEM') {
+          stopPolling();
+
+          if (bar) {
+            bar.className = 'progress-bar bg-danger';
+            bar.style.width = percent + '%';
+            bar.innerText = percent + '%';
+          }
+
+          if (statusText) {
+            statusText.innerHTML = `<span class="text-danger fw-bold"><i class="bi bi-x-circle-fill me-1"></i>Terhenti di ${percent}% (Error)</span>`;
+          }
+
+          showAlert('danger', `
+            <i class="bi bi-exclamation-octagon-fill me-2"></i>
+            <strong>Sistem Terhenti:</strong> ${progress.message || 'Terjadi kendala jaringan/server'}. Anda dapat mencoba menekan tombol <strong>'Lanjutkan Sync'</strong>.
+          `);
+
+          resetSyncButtonUI();
+          if (btnResume) {
+            btnResume.style.display = 'inline-block';
+            btnResume.disabled = false;
+          }
+
+        // -------------------------------------------------------------
+        // CASE 4: PROSES SELESAI 100% (COMPLETED)
+        // -------------------------------------------------------------
+        } else if (progress.status === 'COMPLETED') {
+          stopPolling();
+
+          const isPendingNotify = localStorage.getItem('pending_sync_notify') === 'true';
+
+          if (bar) {
+            bar.style.width = '100%';
+            bar.className = 'progress-bar bg-success';
+            bar.innerText = '100%';
+          }
+          if (percentText) percentText.innerText = '100%';
+          if (statusText) {
+            statusText.innerHTML = `<span class="text-success fw-bold"><i class="bi bi-check-circle-fill me-1"></i>Sinkronisasi Selesai!</span>`;
+          }
+
+          if (isPendingNotify) {
+            showAlert('success', `
+              <div class="d-flex align-items-center justify-content-between">
+                <div>
+                  <i class="bi bi-check-circle-fill me-2"></i><strong>Sinkronisasi Selesai 100%!</strong> Total ${totalPFormatted} data pegawai dari ${totalKFormatted} kantor berhasil direkap.
+                </div>
+                <button type="button" class="btn btn-sm btn-light text-success fw-bold ms-3 shadow-sm" onclick="handleSelesaiSync()">
+                  <i class="bi bi-check2-all me-1"></i>Selesai
+                </button>
+              </div>
+            `);
+          }
+
+          resetSyncButtonUI();
+          if (btnResume) btnResume.style.display = 'none';
+
+        // -------------------------------------------------------------
+        // CASE 5: IDLE / KOSONG
+        // -------------------------------------------------------------
+        } else {
+          // Hanya sembunyikan progress bar jika pengguna memang tidak sedang menekan tombol sync baru
+          if (!isSyncActive) {
+            stopPolling();
+            resetSyncButtonUI();
+            if (container) container.style.display = 'none';
+          } else {
+            // Jika tombol sync baru saja diklik (isSyncActive = true), tunggu respons dari backend
+            syncTimeout = setTimeout(checkSyncStatus, 2000);
+          }
+        }
+      })
+      .withFailureHandler(function(err) {
+        if (isSyncActive) {
+          syncTimeout = setTimeout(checkSyncStatus, 3000);
+        }
+      })
+      .getSyncProgress();
+  }
+
+  /**
+   * Handler saat tombol "Selesai" di notifikasi alert diklik
+   */
+  function handleSelesaiSync() {
+    dismissSyncNotification();
+    resetSyncUI();
+    
+    const alertBox = document.getElementById('alertContainer');
+    if (alertBox) alertBox.style.display = 'none';
+  }
+
+  /**
+   * Menghentikan dan mereset status sinkronisasi
+   */
+  function handleBatalSync() {
+    if (!confirm("Proses akan dihentikan dan status sinkronisasi akan di-reset. Lanjutkan?")) {
+      return;
+    }
+
+    stopPolling();
+    dismissSyncNotification(); // Bersihkan pendeteksi notifikasi lama
+
+    const btnBatal = document.getElementById('btnBatalSync');
+    if (btnBatal) {
+      btnBatal.disabled = true;
+      btnBatal.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>Membatalkan...`;
+    }
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        resetSyncUI();
+        showAlert('warning', '<i class="bi bi-exclamation-circle-fill me-2"></i>Proses sinkronisasi telah dibatalkan.');
+      })
+      .withFailureHandler(function(err) {
+        showAlert('danger', 'Gagal mereset status backend: ' + err.message);
+        resetSyncUI();
+      })
+      .stopSyncPresensi();
+  }
+
+  function resetSyncUI() {
+    stopPolling();
+    resetSyncButtonUI();
+
+    const container = document.getElementById('syncProgressContainer');
+    const bar = document.getElementById('syncProgressBar');
+    const statusText = document.getElementById('syncStatusText');
+    const percentText = document.getElementById('syncPercentText');
+    const detailText = document.getElementById('syncDetailText');
+    const pegawaiText = document.getElementById('syncPegawaiText');
+    const btnBatal = document.getElementById('btnBatalSync');
+    const btnResume = document.getElementById('btnResumeSync');
+
+    if (btnBatal) {
+      btnBatal.disabled = false;
+      btnBatal.innerHTML = `<i class="bi bi-x-circle me-1"></i>Batal / Reset`;
+    }
+
+    if (btnResume) {
+      btnResume.style.display = 'none';
+    }
+
+    if (container) container.style.display = 'none';
+    if (bar) {
+      bar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-primary';
+      bar.style.width = '0%';
+      bar.setAttribute('aria-valuenow', 0);
+      bar.innerText = '0%';
+    }
+    if (statusText) statusText.innerText = 'Memproses sinkronisasi...';
+    if (percentText) percentText.innerText = '0%';
+    if (detailText) detailText.innerText = '0 dari 0 kantor diproses';
+    if (pegawaiText) pegawaiText.innerText = '0 pegawai direkap';
+  }
+
+
+  /**
+   * ==========================================
+   * FUNGSI HELPER & NAVIGASI
+   * ==========================================
+   */
+
+  function validateToken(token) {
+    if (!token) {
+      showAlert('danger', 'Silakan masukkan Kode Token terlebih dahulu!');
+      return false;
+    }
+    localStorage.setItem('saved_api_token', token);
+    return true;
+  }
+
+  function resetSyncButtonUI() {
+    const btnStart = document.getElementById('btnJalankanRekap');
+    const btnResume = document.getElementById('btnResumeSync');
+    const selectBulan = document.getElementById('selectBulan');
+    const selectTahun = document.getElementById('selectTahun');
+
+    if (btnStart) {
+      btnStart.disabled = false;
+      btnStart.innerHTML = `<i class="bi bi-play-fill me-1"></i>Mulai Sync Baru`;
+    }
+
+    if (selectBulan) selectBulan.disabled = false;
+    if (selectTahun) selectTahun.disabled = false;
+
+    if (btnResume) {
+      btnResume.disabled = false;
+      btnResume.innerHTML = `<i class="bi bi-arrow-repeat me-1"></i>Lanjutkan Sync (<span id="txtResumePercent">0%</span>)`;
+    }
+  }
+
+  function resetKantorButtonUI(btn, spinner, icon, btnText) {
+    if (btn) btn.disabled = false;
+    if (spinner) spinner.style.display = 'none';
+    if (icon) icon.style.display = 'inline-block';
+    if (btnText) btnText.innerText = 'Rekap Data Seluruh Kantor';
+  }
+
+  function setButtonLoadingState(btn, isLoading, callback) {
+    if (btn) btn.disabled = isLoading;
+    const alertBox = document.getElementById('alertContainer');
+    if (alertBox) alertBox.style.display = 'none';
+    if (typeof callback === 'function') callback();
+  }
+
+  function navigateToDataKantor() {
+    const subMenuBtn = document.querySelector("#mainNav button[onclick*='dataKantor']");
+    if (typeof loadPage === 'function') {
+      loadPage('dataKantor', subMenuBtn);
+    }
+  }
+
+  function showAlert(type, message) {
+    const alertBox = document.getElementById('alertContainer');
+    if (!alertBox) return;
+    
+    alertBox.className = `alert alert-${type} alert-dismissible fade show shadow-sm mb-4`;
+    alertBox.innerHTML = `
+      ${message}
+      <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close" onclick="dismissSyncNotification()"></button>
+    `;
+    alertBox.style.display = 'block';
+  }
+
+  function dismissSyncNotification() {
+    localStorage.removeItem('pending_sync_notify');
+  }
+</script>
