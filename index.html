@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aplikasi Rekap Presensi</title>
+  <!-- Bootstrap 5 CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- Bootstrap Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+  <!-- CDN SweetAlert2 -->
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <style>
+    body { background-color: #f8f9fa; }
+    .sidebar-menu .list-group-item.active {
+      background-color: #0d6efd;
+      border-color: #0d6efd;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navbar Atas -->
+  <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
+    <div class="container-fluid">
+      <a class="navbar-brand fw-bold" href="#">
+        <i class="bi bi-calendar-check-fill me-2"></i>Aplikasi Rekap Presensi
+      </a>
+    </div>
+  </nav>
+
+  <div class="container-fluid my-4">
+    <div class="row">
+
+      <!-- Sidebar Menu Navigasi -->
+      <div class="col-md-3 col-lg-2 mb-3">
+        <div class="card shadow-sm border-0">
+          <div class="card-header bg-white fw-bold text-uppercase small text-muted">Menu Utama</div>
+          <div class="list-group list-group-flush sidebar-menu" id="mainNav">
+            
+            <!-- GROUP 1: REKAP PRESENSI -->
+            <button class="list-group-item list-group-item-action active fw-semibold" onclick="loadPage('rekapPresensi', this)">
+              <i class="bi bi-file-earmark-text me-2"></i>Rekap Presensi
+            </button>
+            
+            <!-- Sub-menu 1.1: Data Kantor -->
+            <button class="list-group-item list-group-item-action ps-4 text-muted small nav-sub-item" onclick="loadPage('dataKantor', this)">
+              <i class="bi bi-building me-2"></i>Data Kantor
+            </button>
+
+            <!-- GROUP 3: MENU LAIN -->
+            <button class="list-group-item list-group-item-action fw-semibold mt-2" onclick="loadPage('menuLain', this)">
+              <i class="bi bi-grid me-2"></i>Menu Lain
+            </button>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- Area Konten Dinamis -->
+      <div class="col-md-9 col-lg-10">
+        <div id="contentArea">
+          <!-- Loading Spinner saat pertama kali memuat -->
+          <div class="text-center py-5">
+            <div class="spinner-border text-primary" role="status">
+              <span class="visually-hidden">Memuat...</span>
+            </div>
+            <p class="mt-2 text-muted">Memuat halaman...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bootstrap 5 JS Bundle -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+  <!-- Include JavaScript Modul -->
+  <?!= includePage('jsIndex'); ?>
+  <?!= includePage('jsRouter'); ?>
+  <?!= includePage('jsRekapPresensi'); ?>
+  <?!= includePage('jsDataKantor'); ?>
+
+
+</body>
+</html>
