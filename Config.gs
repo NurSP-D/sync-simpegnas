@@ -24,27 +24,6 @@ const CONFIG = {
   SHEET_PPPKPW: "PPPKPW"                         // Nama Sheet Data master PPPKPW
 };
 
-// KONSTANTA CONFIGURASI REKAP PRESENSI
-var CONFIG_REKAP = {
-  FOLDER_ID: "ID_FOLDER_PADA_DRIVE_GOOGLE", // ID Folder REKAP PRESENSI
-  ROW_HEADER: 1,                                  // Baris tempat nama-nama kolom berada
-  ROW_DATA_START: 2                               // Baris awal data pegawai dimulai
-};
-
-// KONSTANTA CONFIGURASI REKAP STATISTIK PRESENSI
-var CONFIG_STATISTIK_DRIVE = {
-  FOLDER_ID: "ID_FOLDER_PADA_DRIVE_GOOGLE", // ID Folder REKAP PRESENSI
-  ROW_HEADER: 1,      // Baris letak Header
-  ROW_DATA_START: 2  // Baris awal data pegawai
-};
-
-// Header Standar / Output Statistik
-var HEADERS_STATISTIK_DEFAULT = [
-  "Nama Pegawai", "NIP", 
-  "HN", "TK", "TM1", "TM2", "TM3", "TMM", "PC1", "PC2", "PC3", "PCM", 
-  "ITM", "IPC", "IDL", "IDLI", "IDLO",
-  "DL", "CT", "CB", "CS", "CM", "CKAP", "LJ", "LN"
-];
 
 
 // ============================================================================
@@ -113,117 +92,9 @@ function getNamaSheetStatistikASN(bulan, tahun) {
 }
 
 // ============================================================================
-// 3. HELPER & UTILITAS STATUS ASN (PNS, PPPK, PPPKPW)
+// 3. HELPER & UTILITAS 
 // ============================================================================
 
-/**
- * Mengambil daftar NIP PPPKPW dari Sheet PPPKPW di Spreadsheet Master.
- * Mengembalikan objek Set agar proses pencarian (lookup) super cepat O(1).
- * 
- * @returns {Set<string>} Set berisi daftar NIP PPPKPW
- */
-function getSetNIPPPPKPW() {
-  try {
-    if (!CONFIG.DATA_MASTER_ID) return new Set();
-    
-    const ssMaster = SpreadsheetApp.openById(CONFIG.DATA_MASTER_ID);
-    const sheetPPPKPW = ssMaster.getSheetByName(CONFIG.SHEET_PPPKPW);
-    
-    if (!sheetPPPKPW) {
-      Logger.log("⚠️ Sheet '" + CONFIG.SHEET_PPPKPW + "' tidak ditemukan di Data Master.");
-      return new Set();
-    }
-
-    const lastRow = sheetPPPKPW.getLastRow();
-    if (lastRow < 2) return new Set(); // Hanya header atau kosong
-
-    // Ambil Kolom A mulai baris ke-2
-    const dataNip = sheetPPPKPW.getRange(2, 1, lastRow - 1, 1).getValues();
-    const setNip = new Set();
-
-    dataNip.forEach(row => {
-      let nip = String(row[0] || '').trim();
-      if (nip !== '') {
-        setNip.add(nip);
-      }
-    });
-
-    return setNip;
-  } catch (err) {
-    Logger.log("⚠️ Gagal membaca data NIP PPPKPW: " + err.message);
-    return new Set();
-  }
-}
-
-/**
- * Menentukan Kategori ASN (PNS, PPPK, atau PPPKPW) dari NIP
- * 
- * @param {string} nip - NIP Pegawai
- * @param {Set<string>} setNipPPPKPW - Object Set hasil pemanggilan getSetNIPPPPKPW()
- * @returns {string} 'PNS', 'PPPK', atau 'PPPKPW'
- */
-function getKategoriASN(nip, setNipPPPKPW) {
-  const strNip = String(nip || '').trim();
-  
-  // Digit ke-13 dan 14 (indeks string 12 dan 13)
-  const kodePengangkatan = strNip.substring(12, 14);
-
-  // 1. Jika digit 13-14 BUKAN 21 -> PNS/CPNS
-  if (kodePengangkatan !== '21') {
-    return 'PNS';
-  }
-
-  // 2. Jika digit 13-14 ADALAH 21, cek di Set PPPKPW
-  if (setNipPPPKPW && setNipPPPKPW.has(strNip)) {
-    return 'PPPKPW'; // Ada di sheet PPPKPW (True)
-  } else {
-    return 'PPPK';   // Tidak ada di sheet PPPKPW (False)
-  }
-}
-
-/**
- * ----------------------------------------------------------------------------
- * 4. FUNGSI DEBUGGER: testDebugDataRekapFolder
- * ----------------------------------------------------------------------------
- * Uji coba pembacaan file dari folder secara independen di Apps Script Editor.
- */
-function testDebugDataRekapFolder() {
-  Logger.log("=== MEMULAI PENGUJIAN BACKEND DINAMIS ===");
-  
-  var testBulan = "01";
-  var testTahun = "2026";
-
-  // Test 1: Buka Sheet Periode 01-2026
-  var sheet = getTargetSheetRekap(testBulan, testTahun);
-  if (!sheet) {
-    Logger.log("❌ ERROR: File/Sheet untuk periode " + testBulan + "-" + testTahun + " tidak dapat dibuka!");
-    return;
-  }
-
-  Logger.log("✅ Berhasil Akses Sheet: " + sheet.getName());
-  Logger.log("✅ Total Baris: " + sheet.getLastRow());
-  Logger.log("✅ Total Kolom: " + sheet.getLastColumn());
-
-  // Test 2: Mengambil Daftar Kantor
-  var listKantor = getDaftarKantorRekap(testBulan, testTahun);
-  Logger.log("\n--- DAFTAR KANTOR UNIK ---");
-  Logger.log("Jumlah Kantor Ditemukan: " + listKantor.length);
-  Logger.log("Sampel Kantor: " + JSON.stringify(listKantor.slice(0, 3)));
-
-  // Test 3: Filter Rekap Data PPPKPW
-  var resData = getRekapDataFiltered({
-    bulan: testBulan,
-    tahun: testTahun,
-    namaKantor: "",
-    statusASN: "PPPKPW" // Menguji filter baru
-  });
-
-  Logger.log("\n--- HASIL FILTER PPPKPW ---");
-  Logger.log("Jumlah Baris Header: " + resData.headers.length);
-  Logger.log("Jumlah Baris Data PPPKPW Ditemukan: " + resData.data.length);
-
-  Logger.log("\n=== PENGUJIAN SELESAI ===");
-}
 
 // ============================================================================
 // 4. LOGGING & STATE MANAGEMENT
