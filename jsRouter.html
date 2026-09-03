@@ -1,0 +1,52 @@
+<script>
+function loadPage(pageName, element) {
+  // 1. Update style aktif di sidebar
+  if (element) {
+    document.querySelectorAll('#mainNav .list-group-item').forEach(el => {
+      el.classList.remove('active', 'fw-bold');
+    });
+    element.classList.add('active');
+  } else {
+    const targetBtn = document.querySelector(`#mainNav button[onclick*='${pageName}']`);
+    if (targetBtn) {
+      document.querySelectorAll('#mainNav .list-group-item').forEach(el => el.classList.remove('active'));
+      targetBtn.classList.add('active');
+    }
+  }
+
+  // 2. Loading State
+  document.getElementById('contentArea').innerHTML = `
+    <div class="text-center py-5">
+      <div class="spinner-border text-primary" role="status"></div>
+      <p class="mt-2 text-muted">Memuat halaman...</p>
+    </div>`;
+
+  // 3. Panggil Backend untuk Inklusi Halaman
+  google.script.run
+    .withSuccessHandler(function(htmlContent) {
+      document.getElementById('contentArea').innerHTML = htmlContent;
+
+      // 4. Inisialisasi Otomatis Per Halaman
+      if (pageName === 'rekapPresensi') {
+        setTimeout(function() {
+          if (typeof initRekapPresensiForm === 'function') initRekapPresensiForm();
+        }, 50);
+      } 
+      else if (pageName === 'dataKantor') {
+        setTimeout(function() {
+          if (typeof loadDataKantorFromBackend === 'function') loadDataKantorFromBackend();
+        }, 50);
+      }
+    })
+    .withFailureHandler(function(err) {
+      document.getElementById('contentArea').innerHTML = `
+        <div class="alert alert-danger">Gagal memuat halaman: ${err.message}</div>`;
+    })
+    .includePage(pageName);
+}
+
+// Jalankan saat aplikasi pertama dibuka
+window.onload = function() {
+  loadPage('rekapPresensi');
+};
+</script>
